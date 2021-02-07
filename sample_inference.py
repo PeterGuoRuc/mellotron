@@ -2,7 +2,6 @@
 
 import matplotlib
 import matplotlib.pyplot as plt
-import IPython.display as ipd
 
 import sys
 ################################################################################################
@@ -14,6 +13,7 @@ from itertools import cycle
 import numpy as np
 import scipy as sp
 from scipy.io.wavfile import write
+import soundfile as sf
 import pandas as pd
 import librosa
 import torch
@@ -60,7 +60,8 @@ def load_mel(path):
     audio_norm = audio_norm.unsqueeze(0)
     audio_norm = torch.autograd.Variable(audio_norm, requires_grad=False)
     melspec = stft.mel_spectrogram(audio_norm)
-    melspec = melspec.cuda()
+    if torch.cuda.is_available():
+        melspec = melspec.cuda()
     return melspec
 
 # Step1: Basic Setups
@@ -71,17 +72,24 @@ stft = TacotronSTFT(hparams.filter_length, hparams.hop_length, hparams.win_lengt
                     hparams.mel_fmax)
 
 checkpoint_path = "mellotron_libritts.pt"
-tacotron = load_model(hparams).cuda().eval()
-tacotron.load_state_dict(torch.load(checkpoint_path)['state_dict'])
+if torch.cuda.is_available():
+    tacotron = load_model(hparams).cuda().eval()
+else:
+    tacotron = load_model(hparams).eval()
+tacotron.load_state_dict(torch.load(checkpoint_path, map_location="cpu")['state_dict'])
 
 
 waveglow_path = 'waveglow_256channels_v4.pt'
-waveglow = torch.load(waveglow_path)['model'].cuda().eval()
-denoiser = Denoiser(waveglow).cuda().eval()
+if torch.cuda.is_available():
+    waveglow = torch.load(waveglow_path)['model'].cuda().eval()
+    denoiser = Denoiser(waveglow).cuda().eval()
+else:
+    waveglow = torch.load(waveglow_path, map_location="cpu")['model'].eval().cpu()
+    denoiser = Denoiser(waveglow).eval()
 
 
 arpabet_dict = cmudict.CMUDict('data/cmu_dictionary')
-audio_paths = '/content/mellotron/data/examples_filelist.txt'
+audio_paths = 'data/examples_filelist.txt'
 dataloader = TextMelLoader(audio_paths, hparams)
 datacollate = TextMelCollate(1)
 
@@ -91,8 +99,11 @@ file_idx = 0
 audio_path, text, sid = dataloader.audiopaths_and_text[file_idx]
 
 # get audio path, encoded text, pitch contour and mel for gst
-text_encoded = torch.LongTensor(text_to_sequence(text, hparams.text_cleaners, arpabet_dict))[None, :].cuda()    
-pitch_contour = dataloader[file_idx][3][None].cuda()
+text_encoded = torch.LongTensor(text_to_sequence(text, hparams.text_cleaners, arpabet_dict))[None, :]
+pitch_contour = dataloader[file_idx][3][None]
+if torch.cuda.is_available():
+    text_encoded = text_encoded.cuda()
+    pitch_contour = pitch_contour.cuda()
 mel = load_mel(audio_path)
 print(audio_path, text)
 
@@ -117,12 +128,16 @@ with torch.no_grad():
     mel_outputs, mel_outputs_postnet, gate_outputs, rhythm = tacotron.forward(x)
     rhythm = rhythm.permute(1, 0, 2)
 
-speaker_id = next(female_speakers) if np.random.randint(2) else next(male_speakers)
-speaker_id = torch.LongTensor([speaker_id]).cuda()
+# speaker_id = next(female_speakers) if np.random.randint(2) else next(male_speakers)
+speaker_id = next(male_speakers)
+# speaker_id = 1
+speaker_id = torch.LongTensor([speaker_id])
+if torch.cuda.is_available():
+    speaker_id = speaker_id.cuda()
 
 with torch.no_grad():
     mel_outputs, mel_outputs_postnet, gate_outputs, _ = tacotron.inference_noattention(
-        (text_encoded, mel, speaker_id, pitch_contour, rhythm))
+        (text_encoded, mel, speaker_id, pitch_contour * 0.4, rhythm))
 
 plot_mel_f0_alignment(x[2].data.cpu().numpy()[0],
                       mel_outputs_postnet.data.cpu().numpy()[0],
@@ -131,3 +146,6 @@ plot_mel_f0_alignment(x[2].data.cpu().numpy()[0],
 
 with torch.no_grad():
     audio = denoiser(waveglow.infer(mel_outputs_postnet, sigma=0.8), 0.01)[:, 0]
+
+
+sf.write("test-example4.wav", audio.detach().cpu().numpy().T, hparams.sampling_rate)

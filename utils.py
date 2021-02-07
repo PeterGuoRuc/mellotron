@@ -1,18 +1,28 @@
 import numpy as np
 from scipy.io.wavfile import read
 import torch
-
+import librosa
+import soundfile as sf
 
 def get_mask_from_lengths(lengths):
     max_len = torch.max(lengths).item()
-    ids = torch.arange(0, max_len, out=torch.cuda.LongTensor(max_len))
+    if torch.cuda.is_available():
+        ids = torch.arange(0, max_len, out=torch.cuda.LongTensor(max_len))
+    else:
+        ids = torch.arange(0, max_len, out=torch.LongTensor(max_len))
     mask = (ids < lengths.unsqueeze(1)).bool()
     return mask
 
 
-def load_wav_to_torch(full_path):
-    sampling_rate, data = read(full_path)
+def load_wav_to_torch(full_path, required_sampling_rate):
+    # sampling_rate, data = read(full_path)
+    data, sampling_rate = sf.read(full_path, dtype="float32")
+    if sampling_rate != required_sampling_rate:
+        data = librosa.resample(data, sampling_rate, required_sampling_rate)
+        sampling_rate = required_sampling_rate
+    data = (data * 32768).astype("int")
     return torch.FloatTensor(data.astype(np.float32)), sampling_rate
+        
 
 
 def load_filepaths_and_text(filename, split="|"):

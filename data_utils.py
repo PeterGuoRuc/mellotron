@@ -73,7 +73,7 @@ class TextMelLoader(torch.utils.data.Dataset):
         return torch.IntTensor([self.speaker_ids[int(speaker_id)]])
 
     def get_mel_and_f0(self, filepath):
-        audio, sampling_rate = load_wav_to_torch(filepath)
+        audio, sampling_rate = load_wav_to_torch(filepath, self.stft.sampling_rate)
         if sampling_rate != self.stft.sampling_rate:
             raise ValueError("{} SR doesn't match target {} SR".format(
                 sampling_rate, self.stft.sampling_rate))
